@@ -19,9 +19,15 @@ RESULT_FOLDER = 'results'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(RESULT_FOLDER, exist_ok=True)
 
-# Carregar modelo Whisper (base para ser rápido)
-print("Carregando modelo Whisper...")
-whisper_model = whisper.load_model("base")
+# Modelo Whisper global, mas carregado apenas na primeira vez que for usado
+whisper_model = None
+
+def get_whisper_model():
+    global whisper_model
+    if whisper_model is None:
+        print("Carregando modelo Whisper pela primeira vez...")
+        whisper_model = whisper.load_model("tiny") # Modelo 'tiny' é muito mais leve para o Railway
+    return whisper_model
 
 @app.route('/api/remove-bg', methods=['POST'])
 def remove_bg():
@@ -58,11 +64,8 @@ def pdf_convert():
             cv = Converter(input_path)
             cv.convert(result_path)
             cv.close()
-        else:
-            # Fallback simples para outros formatos ou erro
-            return jsonify({"error": f"Conversão para {target_format} ainda em desenvolvimento"}), 400
-            
-        return jsonify({"download_url": f"/api/download/{result_filename}"})
+            return jsonify({"download_url": f"/api/download/{result_filename}"})
+        return jsonify({"error": "Formato não suportado"}), 400
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -71,7 +74,7 @@ def compress_video():
     if 'file' not in request.files:
         return jsonify({"error": "Nenhum arquivo enviado"}), 400
     file = request.files['file']
-    crf = request.form.get('crf', '18')
+    crf = request.form.get('crf', '23') # CRF 23 é o padrão balanceado
     
     temp_id = str(uuid.uuid4())
     input_path = os.path.join(UPLOAD_FOLDER, f"{temp_id}_{file.filename}")
@@ -81,8 +84,7 @@ def compress_video():
     result_path = os.path.join(RESULT_FOLDER, result_filename)
     
     try:
-        # ffmpeg -i input.mp4 -vcodec libx264 -crf 18 -preset slow output.mp4
-        cmd = ['ffmpeg', '-i', input_path, '-vcodec', 'libx264', '-crf', str(crf), '-preset', 'fast', result_path]
+        cmd = ['ffmpeg', '-i', input_path, '-vcodec', 'libx264', '-crf', str(crf), '-preset', 'ultrafast', result_path]
         subprocess.run(cmd, check=True)
         return jsonify({"download_url": f"/api/download/{result_filename}"})
     except Exception as e:
@@ -102,7 +104,7 @@ def extract_audio():
     result_path = os.path.join(RESULT_FOLDER, result_filename)
     
     try:
-        cmd = ['ffmpeg', '-i', input_path, '-vn', '-c:a', 'libmp3lame', '-q:a', '2', result_path]
+        cmd = ['ffmpeg', '-i', input_path, '-vn', '-c:a', 'libmp3lame', '-q:a', '4', result_path]
         subprocess.run(cmd, check=True)
         return jsonify({"download_url": f"/api/download/{result_filename}"})
     except Exception as e:
@@ -119,7 +121,8 @@ def transcribe():
     file.save(input_path)
     
     try:
-        result = whisper_model.transcribe(input_path)
+        model = get_whisper_model()
+        result = model.transcribe(input_path)
         text = result['text']
         
         result_filename = f"transcription_{temp_id}.txt"
@@ -127,10 +130,7 @@ def transcribe():
         with open(result_path, 'w', encoding='utf-8') as f:
             f.write(text)
             
-        return jsonify({
-            "text": text,
-            "download_url": f"/api/download/{result_filename}"
-        })
+        return jsonify({"text": text, "download_url": f"/api/download/{result_filename}"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -138,10 +138,7 @@ def transcribe():
 def download_custom():
     data = request.json
     url = data.get('url')
-    platform = data.get('platform')
-    
-    if not url:
-        return jsonify({"error": "URL não fornecida"}), 400
+    if not url: return jsonify({"error": "URL não fornecida"}), 400
         
     try:
         ydl_opts = {
@@ -149,13 +146,11 @@ def download_custom():
             'outtmpl': os.path.join(RESULT_FOLDER, f'dl_{uuid.uuid4()}_%(title)s.%(ext)s'),
             'quiet': True,
         }
-        
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
             filename = ydl.prepare_filename(info)
             basename = os.path.basename(filename)
-            
-        return jsonify({"download_url": f"/api/download/{basename}", "filename": basename})
+        return jsonify({"download_url": f"/api/download/{basename}"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -166,5 +161,10 @@ def download_file(filename):
         return send_file(path, as_attachment=True)
     return "Arquivo não encontrado", 404
 
+@app.route('/')
+def home():
+    return "Lima Ferramentas API Online!"
+
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
