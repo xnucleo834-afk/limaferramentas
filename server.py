@@ -1,37 +1,26 @@
 import os
 import uuid
 import subprocess
+import io
 from flask import Flask, request, send_file, jsonify
 from flask_cors import CORS
-from rembg import remove
-from pdf2docx import Converter
-import whisper
-import yt_dlp
-from PIL import Image
-import io
-import qrcode
 
 app = Flask(__name__)
 CORS(app)
 
-# Pastas de trabalho
+# Configurações de pastas
 UPLOAD_FOLDER = 'uploads'
 RESULT_FOLDER = 'results'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(RESULT_FOLDER, exist_ok=True)
 
-# Modelo Whisper carregado sob demanda para não travar o início
-whisper_model = None
-
-def get_whisper_model():
-    global whisper_model
-    if whisper_model is None:
-        print("Carregando modelo Whisper (tiny)...")
-        whisper_model = whisper.load_model("tiny")
-    return whisper_model
+# ---------------------------------------------------------
+# IMPORTAÇÕES SOB DEMANDA (Para o servidor iniciar INSTANTÂNEO)
+# ---------------------------------------------------------
 
 @app.route('/api/remove-bg', methods=['POST'])
 def remove_bg():
+    from rembg import remove # Importa só quando usa
     try:
         if 'image' not in request.files:
             return jsonify({"error": "Nenhuma imagem enviada"}), 400
@@ -50,6 +39,7 @@ def remove_bg():
 
 @app.route('/api/pdf-convert', methods=['POST'])
 def pdf_convert():
+    from pdf2docx import Converter # Importa só quando usa
     try:
         if 'file' not in request.files:
             return jsonify({"error": "Nenhum arquivo enviado"}), 400
@@ -87,6 +77,7 @@ def compress_video():
         result_filename = f"compressed_{temp_id}_{file.filename}"
         result_path = os.path.join(RESULT_FOLDER, result_filename)
         
+        # FFmpeg é comando de sistema, não precisa de import pesado
         cmd = ['ffmpeg', '-i', input_path, '-vcodec', 'libx264', '-crf', str(crf), '-preset', 'ultrafast', result_path]
         subprocess.run(cmd, check=True)
         return jsonify({"download_url": f"/api/download/{result_filename}"})
@@ -115,6 +106,7 @@ def extract_audio():
 
 @app.route('/api/transcribe', methods=['POST'])
 def transcribe():
+    import whisper # Importa só quando usa
     try:
         if 'file' not in request.files:
             return jsonify({"error": "Nenhum arquivo enviado"}), 400
@@ -124,7 +116,7 @@ def transcribe():
         input_path = os.path.join(UPLOAD_FOLDER, f"{temp_id}_{file.filename}")
         file.save(input_path)
         
-        model = get_whisper_model()
+        model = whisper.load_model("tiny") # Modelo leve
         result = model.transcribe(input_path)
         text = result['text']
         
@@ -139,6 +131,7 @@ def transcribe():
 
 @app.route('/api/download-custom', methods=['POST'])
 def download_custom():
+    import yt_dlp # Importa só quando usa
     try:
         data = request.json
         url = data.get('url')
@@ -170,7 +163,5 @@ def health_check():
     return "Lima Ferramentas API Online!", 200
 
 if __name__ == '__main__':
-    # Forçar o uso da porta que o Render fornece (padrão 10000)
     port = int(os.environ.get("PORT", 10000))
-    print(f"Iniciando servidor na porta {port}...")
     app.run(host='0.0.0.0', port=port)
