@@ -1,0 +1,13 @@
+flask
+flask-cors
+rembg[cpu]
+onnxruntime
+pdf2docx
+pytesseract
+moviepy
+yt-dlp
+openai-whisper
+qrcode
+pillow
+requests
+gunicorn
